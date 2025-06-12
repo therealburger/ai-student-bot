@@ -1,64 +1,54 @@
 import os
 import logging
+import httpx
+
 from aiogram import Bot, Dispatcher, types
 from aiogram.dispatcher.filters import CommandStart
-from aiogram.utils.exceptions import TelegramAPIError
 from fastapi import FastAPI, Request
-import httpx
+
 from dotenv import load_dotenv
 
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
 WEBHOOK_URL = os.getenv("WEBHOOK_URL") + WEBHOOK_PATH
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("bot")
 
 bot = Bot(token=BOT_TOKEN)
-bot.set_current(bot)
 dp = Dispatcher(bot)
 app = FastAPI()
 
-
 @app.on_event("startup")
 async def on_startup():
-    try:
-        await bot.set_webhook(WEBHOOK_URL)
-        logger.info(f"✅ Webhook установлен на {WEBHOOK_URL}")
-    except TelegramAPIError as e:
-        logger.error(f"Ошибка установки webhook: {e}")
-
+    await bot.set_webhook(WEBHOOK_URL)
+    logger.info(f"✅ Webhook установлен на {WEBHOOK_URL}")
 
 @app.post(WEBHOOK_PATH)
-async def handle_webhook(request: Request):
-    try:
-        data = await request.json()
-        update = types.Update(**data)
-        await dp.process_update(update)
-    except Exception as e:
-        logger.error(f"Ошибка обработки запроса: {e}")
+async def process_webhook(request: Request):
+    update = types.Update(**await request.json())
+    await dp.process_update(update)
     return {"status": "ok"}
 
-
 @dp.message_handler(CommandStart())
-async def start_handler(message: types.Message):
-    await message.answer("Привет! Я AI-помощник для студентов. Задай мне вопрос.")
-
+async def cmd_start(message: types.Message):
+    await message.reply("Привет! Я AI-помощник. Задай свой вопрос.")
 
 @dp.message_handler()
-async def ask_mistral(message: types.Message):
+async def ask_ai(message: types.Message):
     try:
         headers = {
             "Authorization": f"Bearer {OPENROUTER_API_KEY}",
             "Content-Type": "application/json"
         }
-        payload = {
-            "model": "mistralai/mistral-7b-instruct",
+
+        data = {
+            "model": "openchat/openchat-3.5-1210",  # Популярная бесплатная модель
             "messages": [
-                {"role": "system", "content": "Ты полезный AI-ассистент для студентов."},
+                {"role": "system", "content": "Ты — полезный ассистент для студентов."},
                 {"role": "user", "content": message.text}
             ]
         }
@@ -67,19 +57,16 @@ async def ask_mistral(message: types.Message):
             response = await client.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers=headers,
-                json=payload,
-                timeout=30
+                json=data
             )
 
-        data = response.json()
-
-        if "choices" in data:
-            reply = data["choices"][0]["message"]["content"]
+        if response.status_code == 200:
+            res = response.json()
+            reply = res["choices"][0]["message"]["content"]
+            await message.reply(reply)
         else:
-            reply = "Ошибка: не удалось получить ответ от модели."
-
-        await message.reply(reply)
-
+            logger.error(f"Ошибка OpenRouter: {response.text}")
+            await message.reply("Ошибка: не удалось получить ответ от модели.")
     except Exception as e:
-        logger.error(f"Ошибка OpenRouter: {e}")
-        await message.reply("Произошла ошибка при обращении к ИИ. Попробуй позже.")
+        logger.exception("Произошла ошибка при обращении к модели.")
+        await message.reply("Произошла ошибка при обработке запроса.")
