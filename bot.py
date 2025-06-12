@@ -70,3 +70,4 @@ async def on_shutdown():
 @app.on_event("shutdown")
 async def on_shutdown():
     await bot.delete_webhook()
+    await bot.delete_webhook()
