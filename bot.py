@@ -43,7 +43,7 @@ async def telegram_webhook(req: Request):
 @app.on_event("startup")
 async def on_startup():
     await bot.set_webhook(WEBHOOK_URL)
-    print(f"Webhook установлен на {WEBHOOK_URL}")import logging
+    print(f"Webhook установлен на {WEBHOOK_URL}")
 import os
 from aiogram import Bot, Dispatcher, types
 from aiogram.utils.executor import start_webhook
