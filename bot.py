@@ -2,11 +2,11 @@ import os
 import logging
 import httpx
 
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import Update
-from aiogram.filters import CommandStart
+from aiogram.types import Update, FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.filters import CommandStart, Command
 from fastapi import FastAPI, Request
 from dotenv import load_dotenv
 
@@ -30,13 +30,41 @@ dp = Dispatcher(storage=MemoryStorage())
 # FastAPI
 app = FastAPI()
 
-# Обработка команды /start
+# Кнопки
+menu_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="📚 Получить материалы", callback_data="materials")],
+    [InlineKeyboardButton(text="🔄 Поделиться ботом", switch_inline_query="")],
+    [InlineKeyboardButton(text="💳 Подписка скоро", callback_data="subscribe")],
+])
+
+# Команда /start
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
-    await message.answer("Привет! Я AI-помощник. Задай вопрос или пришли файл/голосовое.")
+    await message.answer(
+        "Привет! Я AI-помощник для студентов 🎓\n\n"
+        "❓ Задавай мне вопросы\n📎 Получай материалы\n💬 Делись с друзьями\n\n"
+        "⬇️ Выбери действие ниже:",
+        reply_markup=menu_keyboard
+    )
 
-# Обработка текстовых сообщений
-@dp.message(lambda msg: msg.text)
+# Получить материалы (PDF)
+@dp.callback_query(F.data == "materials")
+async def send_materials(callback: types.CallbackQuery):
+    await callback.answer()
+    file_path = "materials/sample_essay.pdf"
+    doc = FSInputFile(file_path, filename="Реферат.pdf")
+    await callback.message.answer_document(
+        doc, caption="📎 Вот пример реферата. Скоро будет больше материалов!"
+    )
+
+# Подписка (заглушка)
+@dp.callback_query(F.data == "subscribe")
+async def subscribe_soon(callback: types.CallbackQuery):
+    await callback.answer()
+    await callback.message.answer("💳 Подписка появится скоро! Пока пользуйся ботом бесплатно.")
+
+# Обработка текстов — AI-ответ
+@dp.message()
 async def ask_ai(message: types.Message):
     try:
         headers = {
@@ -45,9 +73,9 @@ async def ask_ai(message: types.Message):
         }
 
         data = {
-            "model": "mistralai/mistral-7b-instruct",
+            "model": "openrouter/openchat-3.5-0106",
             "messages": [
-                {"role": "system", "content": "Ты полезный ассистент для студентов."},
+                {"role": "system", "content": "Ты полезный AI-ассистент для студентов."},
                 {"role": "user", "content": message.text}
             ]
         }
@@ -60,38 +88,20 @@ async def ask_ai(message: types.Message):
             )
 
         result = response.json()
-        if "choices" in result:
-            reply = result["choices"][0]["message"]["content"]
-            await message.answer(reply)
-        else:
-            logger.error(f"Ошибка OpenRouter: {result}")
-            await message.answer("Ошибка: не удалось получить ответ от модели.")
+        reply = result["choices"][0]["message"]["content"]
+        await message.answer(reply)
+
     except Exception as e:
-        logger.exception("Ошибка при обращении к OpenRouter")
-        await message.answer("Произошла ошибка при обработке запроса.")
+        logger.exception(f"Ошибка OpenRouter: {e}")
+        await message.answer("❌ Ошибка: не удалось получить ответ от модели.")
 
-# Обработка голосовых сообщений
-@dp.message(lambda msg: msg.voice)
-async def handle_voice(message: types.Message):
-    await message.answer("🎙 Обработка голосовых пока в разработке.")
-
-# Обработка изображений
-@dp.message(lambda msg: msg.photo)
-async def handle_photo(message: types.Message):
-    await message.answer("🖼 Обработка изображений в скором времени будет доступна!")
-
-# Обработка документов (файлов)
-@dp.message(lambda msg: msg.document)
-async def handle_document(message: types.Message):
-    await message.answer("📄 Файл получен! Мы скоро научим меня его анализировать.")
-
-# Webhook: запуск при старте
+# Webhook: установка
 @app.on_event("startup")
 async def on_startup():
     await bot.set_webhook(FULL_WEBHOOK_URL)
     logger.info(f"✅ Webhook установлен на {FULL_WEBHOOK_URL}")
 
-# Webhook: обработка входящих сообщений
+# Webhook: входящие обновления
 @app.post(WEBHOOK_PATH)
 async def webhook(request: Request):
     try:
