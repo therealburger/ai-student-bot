@@ -1,10 +1,18 @@
 import openai
-from aiogram import Bot, Dispatcher, types, executor
+import os
+from aiogram import Bot, Dispatcher, types
+from aiogram.utils.executor import start_webhook
+from fastapi import FastAPI, Request
 from config import TELEGRAM_TOKEN, OPENAI_API_KEY
 
+openai.api_key = OPENAI_API_KEY
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher(bot)
-openai.api_key = OPENAI_API_KEY
+
+WEBHOOK_PATH = f"/webhook/{TELEGRAM_TOKEN}"
+WEBHOOK_URL = os.getenv("WEBHOOK_URL") + WEBHOOK_PATH
+
+app = FastAPI()
 
 @dp.message_handler(commands=['start'])
 async def start(message: types.Message):
@@ -25,6 +33,18 @@ async def ask(message: types.Message):
         await message.reply("⚠️ Ошибка при обращении к OpenAI.")
         print(f"OpenAI error: {e}")
 
-if __name__ == '__main__':
-    print("Бот запущен...")
-    executor.start_polling(dp, skip_updates=True)
+@app.post(WEBHOOK_PATH)
+async def telegram_webhook(req: Request):
+    data = await req.json()
+    update = types.Update.to_object(data)
+    await dp.process_update(update)
+    return {"ok": True}
+
+@app.on_event("startup")
+async def on_startup():
+    await bot.set_webhook(WEBHOOK_URL)
+    print(f"Webhook установлен на {WEBHOOK_URL}")
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    await bot.delete_webhook()
