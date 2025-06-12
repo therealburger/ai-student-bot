@@ -2,99 +2,102 @@ import os
 import logging
 import httpx
 
-from aiogram import Bot, Dispatcher, F, types
+from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import FSInputFile, BufferedInputFile
+from aiogram.types import Update
 from aiogram.filters import CommandStart
 from fastapi import FastAPI, Request
 from dotenv import load_dotenv
 
-# Загрузка .env
+# Загрузка переменных окружения
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN is not set")
-if not OPENROUTER_API_KEY:
-    raise RuntimeError("OPENROUTER_API_KEY is not set")
-
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
 FULL_WEBHOOK_URL = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
 
+# Настройка логов
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("bot")
 
+# Инициализация бота и диспетчера
 bot = Bot(token=BOT_TOKEN, default=types.DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=MemoryStorage())
 
+# FastAPI
 app = FastAPI()
 
-# ==== OpenRouter.ai ====
-async def ask_openrouter(prompt: str) -> str:
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": "openrouter/auto",
-        "messages": [
-            {"role": "system", "content": "Ты полезный AI-помощник для студентов."},
-            {"role": "user", "content": prompt}
-        ]
-    }
-    async with httpx.AsyncClient() as client:
-        resp = await client.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload)
-        result = resp.json()
-        if "choices" in result:
-            return result["choices"][0]["message"]["content"]
-        else:
-            logger.error(f"OpenRouter error: {result}")
-            return "\u041eшибка: ответ не был получен."
-
-# ==== Handlers ====
+# Обработка команды /start
 @dp.message(CommandStart())
-async def handle_start(message: types.Message):
-    await message.answer("Привет! Я AI-помощник. Можешь скинуть текст, документ, фото или голос.")
+async def cmd_start(message: types.Message):
+    await message.answer("Привет! Я AI-помощник. Задай вопрос или пришли файл/голосовое.")
 
-@dp.message(F.document)
-async def handle_doc(message: types.Message, bot: Bot):
-    doc = message.document
-    if doc.mime_type == "text/plain":
-        file = await bot.download(doc)
-        text = file.read().decode("utf-8")
-        reply = await ask_openrouter(text)
-        await message.answer(reply)
-    else:
-        await message.answer("Пока читаю только .txt файлы")
+# Обработка текстовых сообщений
+@dp.message(lambda msg: msg.text)
+async def ask_ai(message: types.Message):
+    try:
+        headers = {
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json"
+        }
 
-@dp.message(F.voice)
+        data = {
+            "model": "mistralai/mistral-7b-instruct",
+            "messages": [
+                {"role": "system", "content": "Ты полезный ассистент для студентов."},
+                {"role": "user", "content": message.text}
+            ]
+        }
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers=headers,
+                json=data
+            )
+
+        result = response.json()
+        if "choices" in result:
+            reply = result["choices"][0]["message"]["content"]
+            await message.answer(reply)
+        else:
+            logger.error(f"Ошибка OpenRouter: {result}")
+            await message.answer("Ошибка: не удалось получить ответ от модели.")
+    except Exception as e:
+        logger.exception("Ошибка при обращении к OpenRouter")
+        await message.answer("Произошла ошибка при обработке запроса.")
+
+# Обработка голосовых сообщений
+@dp.message(lambda msg: msg.voice)
 async def handle_voice(message: types.Message):
-    await message.answer("Пока разбор голосовых не реализован. Скоро добавим!")
+    await message.answer("🎙 Обработка голосовых пока в разработке.")
 
-@dp.message(F.photo)
+# Обработка изображений
+@dp.message(lambda msg: msg.photo)
 async def handle_photo(message: types.Message):
-    await message.answer("Обработка изображений в разработке.")
+    await message.answer("🖼 Обработка изображений в скором времени будет доступна!")
 
-@dp.message(F.text)
-async def handle_text(message: types.Message):
-    reply = await ask_openrouter(message.text)
-    await message.answer(reply)
+# Обработка документов (файлов)
+@dp.message(lambda msg: msg.document)
+async def handle_document(message: types.Message):
+    await message.answer("📄 Файл получен! Мы скоро научим меня его анализировать.")
 
-# ==== FastAPI integration ====
+# Webhook: запуск при старте
 @app.on_event("startup")
-async def startup():
+async def on_startup():
     await bot.set_webhook(FULL_WEBHOOK_URL)
     logger.info(f"✅ Webhook установлен на {FULL_WEBHOOK_URL}")
 
+# Webhook: обработка входящих сообщений
 @app.post(WEBHOOK_PATH)
-async def on_webhook(request: Request):
+async def webhook(request: Request):
     try:
         data = await request.json()
-        update = types.Update.model_validate(data)
+        update = Update.model_validate(data)
         await dp.feed_update(bot, update)
     except Exception as e:
-        logger.exception(f"Ошибка в вебхуке: {e}")
+        logger.exception(f"Ошибка обновления: {e}")
     return {"ok": True}
