@@ -3,41 +3,41 @@ import logging
 import httpx
 
 from aiogram import Bot, Dispatcher, types
-from aiogram.dispatcher.filters import CommandStart
+from aiogram.enums import ParseMode
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import Update
+from aiogram.filters import CommandStart
 from fastapi import FastAPI, Request
-
 from dotenv import load_dotenv
 
+# Загрузка переменных окружения
 load_dotenv()
-
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
-WEBHOOK_URL = os.getenv("WEBHOOK_URL") + WEBHOOK_PATH
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
+WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
+FULL_WEBHOOK_URL = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
+
+# Настройка логов
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("bot")
 
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(bot)
+# Инициализация бота и диспетчера
+bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
+dp = Dispatcher(storage=MemoryStorage())
+bot.set_current(bot)
+
+# FastAPI
 app = FastAPI()
 
-@app.on_event("startup")
-async def on_startup():
-    await bot.set_webhook(WEBHOOK_URL)
-    logger.info(f"✅ Webhook установлен на {WEBHOOK_URL}")
-
-@app.post(WEBHOOK_PATH)
-async def process_webhook(request: Request):
-    update = types.Update(**await request.json())
-    await dp.process_update(update)
-    return {"status": "ok"}
-
-@dp.message_handler(CommandStart())
+# Обработка команды /start
+@dp.message(CommandStart())
 async def cmd_start(message: types.Message):
-    await message.reply("Привет! Я AI-помощник. Задай свой вопрос.")
+    await message.answer("Привет! Я AI-помощник. Задай вопрос.")
 
-@dp.message_handler()
+# Обработка обычных сообщений
+@dp.message()
 async def ask_ai(message: types.Message):
     try:
         headers = {
@@ -46,9 +46,9 @@ async def ask_ai(message: types.Message):
         }
 
         data = {
-            "model": "openchat/openchat-3.5-1210",  # Популярная бесплатная модель
+            "model": "openchat/openchat-3.5-1210",
             "messages": [
-                {"role": "system", "content": "Ты — полезный ассистент для студентов."},
+                {"role": "system", "content": "Ты полезный ассистент для студентов."},
                 {"role": "user", "content": message.text}
             ]
         }
@@ -60,13 +60,30 @@ async def ask_ai(message: types.Message):
                 json=data
             )
 
-        if response.status_code == 200:
-            res = response.json()
-            reply = res["choices"][0]["message"]["content"]
-            await message.reply(reply)
+        result = response.json()
+        if "choices" in result:
+            reply = result["choices"][0]["message"]["content"]
+            await message.answer(reply)
         else:
-            logger.error(f"Ошибка OpenRouter: {response.text}")
-            await message.reply("Ошибка: не удалось получить ответ от модели.")
+            logger.error(f"Ошибка OpenRouter: {result}")
+            await message.answer("Ошибка: не удалось получить ответ от модели.")
     except Exception as e:
-        logger.exception("Произошла ошибка при обращении к модели.")
-        await message.reply("Произошла ошибка при обработке запроса.")
+        logger.exception("Ошибка при обращении к OpenRouter")
+        await message.answer("Произошла ошибка при обработке запроса.")
+
+# Webhook: запуск при старте
+@app.on_event("startup")
+async def on_startup():
+    await bot.set_webhook(FULL_WEBHOOK_URL)
+    logger.info(f"✅ Webhook установлен на {FULL_WEBHOOK_URL}")
+
+# Webhook: обработка входящих сообщений
+@app.post(WEBHOOK_PATH)
+async def webhook(request: Request):
+    try:
+        data = await request.json()
+        update = Update.model_validate(data)
+        await dp.feed_update(bot, update)
+    except Exception as e:
+        logger.exception(f"Ошибка обновления: {e}")
+    return {"ok": True}
