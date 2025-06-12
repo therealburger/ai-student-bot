@@ -13,6 +13,7 @@ from aiogram.client.default import DefaultBotProperties
 
 # Загрузка переменных окружения
 load_dotenv()
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
@@ -53,7 +54,7 @@ async def ask_ai(message: types.Message):
         }
 
         data = {
-            "model": "openchat/openchat-3.5-1210",
+            "model": "mistralai/mistral-7b-instruct",
             "messages": [
                 {"role": "system", "content": "Ты полезный ассистент для студентов."},
                 {"role": "user", "content": message.text}
