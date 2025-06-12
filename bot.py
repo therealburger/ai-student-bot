@@ -14,6 +14,7 @@ openai.api_key = OPENAI_API_KEY
 
 # Создание бота и диспетчера
 bot = Bot(token=TELEGRAM_TOKEN)
+Bot.set_current(bot)  # <- ВАЖНО: чтобы избежать ошибки "Can't get bot instance"
 dp = Dispatcher(bot)
 
 # Настройка вебхука
@@ -66,8 +67,6 @@ async def on_startup():
 async def on_shutdown():
     await bot.delete_webhook()
     logging.info("🛑 Webhook удалён")
-
-@app.on_event("shutdown")
 async def on_shutdown():
     await bot.delete_webhook()
     await bot.delete_webhook()
