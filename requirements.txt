@@ -1,5 +1,6 @@
 aiogram>=3.7.0
-fastapi
-uvicorn
 httpx
 python-dotenv
+fastapi
+uvicorn
+python-docx
