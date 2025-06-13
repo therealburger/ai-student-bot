@@ -1,97 +1,107 @@
 import os
 import logging
-import httpx
-
+from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ParseMode
-from aiogram.types import DefaultBotProperties, Message, FSInputFile
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.client.default import DefaultBotProperties
+from aiogram.types import Message, FSInputFile, Update
 from aiogram.filters import CommandStart
-from fastapi import FastAPI, Request
+from aiogram.fsm.storage.memory import MemoryStorage
 from dotenv import load_dotenv
-
+import httpx
 from docx import Document
 
-# Загрузка переменных окружения
+# Загрузка .env
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
+if not BOT_TOKEN:
+    raise RuntimeError("❌ BOT_TOKEN is not set")
+if not OPENROUTER_API_KEY:
+    raise RuntimeError("❌ OPENROUTER_API_KEY is not set")
+
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
 FULL_WEBHOOK_URL = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
 
-# Логирование
+# Настройка логгера
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("bot")
 
-# Инициализация бота и FastAPI
+# Инициализация
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=MemoryStorage())
 app = FastAPI()
 
-# Команда /start
+# /start
 @dp.message(CommandStart())
-async def start(message: Message):
-    await message.answer("Привет! Я AI-помощник. Напиши тему, и я сгенерирую реферат в .docx!")
+async def start_cmd(message: Message):
+    await message.answer("👋 Привет! Напиши тему — и я отправлю тебе реферат в файле.")
 
-# Обработка сообщений
-@dp.message(F.text)
-async def handle_text(message: Message):
-    try:
-        # Отправка запроса в OpenRouter
-        headers = {
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json"
-        }
+# Генерация текста через OpenRouter
+async def generate_text(prompt: str) -> str:
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "model": "openrouter/cinematika-7b",  # Замените при необходимости
+        "messages": [
+            {"role": "system", "content": "Ты помощник студентов. Пиши полные ответы."},
+            {"role": "user", "content": prompt}
+        ]
+    }
 
-        data = {
-            "model": "mistralai/mistral-7b-instruct",  # Популярная бесплатная модель
-            "messages": [
-                {"role": "system", "content": "Сгенерируй краткий студенческий реферат на тему."},
-                {"role": "user", "content": message.text}
-            ]
-        }
-
-        async with httpx.AsyncClient() as client:
-            response = await client.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data)
-
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers=headers,
+            json=data
+        )
         result = response.json()
-        if "choices" not in result:
+        if "choices" in result:
+            return result["choices"][0]["message"]["content"]
+        else:
             logger.error(f"Ошибка OpenRouter: {result}")
-            await message.answer("Ошибка генерации. Попробуй позже.")
-            return
+            return None
 
-        content = result["choices"][0]["message"]["content"]
+# Обработка обычных сообщений
+@dp.message(F.text)
+async def handle_message(message: Message):
+    await message.answer("⏳ Генерирую реферат...")
 
-        # Сохраняем результат в файл .docx
-        file_path = f"/tmp/ref_{message.from_user.id}.docx"
-        document = Document()
-        document.add_heading(message.text, 0)
-        document.add_paragraph(content)
-        document.save(file_path)
+    topic = message.text.strip()
+    content = await generate_text(topic)
 
-        # Отправляем пользователю файл
-        await message.answer_document(FSInputFile(file_path), caption="Вот твой реферат 🎓")
+    if not content:
+        await message.answer("⚠️ Ошибка генерации текста.")
+        return
 
-    except Exception as e:
-        logger.exception("Ошибка при генерации или отправке файла")
-        await message.answer("Произошла ошибка. Попробуй позже.")
+    # Генерация .docx
+    filename = f"ref_{message.from_user.id}.docx"
+    doc = Document()
+    doc.add_heading(topic, 0)
+    doc.add_paragraph(content)
+    filepath = f"/tmp/{filename}"
+    doc.save(filepath)
 
-# Установка webhook
+    await message.answer_document(FSInputFile(filepath, filename=filename))
+
+# Webhook
 @app.on_event("startup")
-async def on_startup():
+async def startup():
     await bot.set_webhook(FULL_WEBHOOK_URL)
     logger.info(f"✅ Webhook установлен на {FULL_WEBHOOK_URL}")
 
-# Обработка запросов от Telegram
 @app.post(WEBHOOK_PATH)
 async def webhook_handler(request: Request):
     try:
         data = await request.json()
-        update = bot.session.telegram_object_decoder.decode(data)
+        update = Update.model_validate(data)
         await dp.feed_update(bot, update)
     except Exception as e:
-        logger.exception("Ошибка при обработке обновления")
+        logger.exception(f"Ошибка: {e}")
     return {"ok": True}
+
 
