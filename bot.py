@@ -1,19 +1,17 @@
 import os
 import logging
-from fastapi import FastAPI, Request
+import httpx
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ParseMode
-from aiogram.client.default import DefaultBotProperties
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Message, FSInputFile, Update
 from aiogram.filters import CommandStart
-from aiogram.fsm.storage.memory import MemoryStorage
+from fastapi import FastAPI, Request
 from dotenv import load_dotenv
-import httpx
 from docx import Document
 from pptx import Presentation
-from pptx.util import Inches
 
-# === Настройка переменных окружения ===
+# Загрузка переменных окружения
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
@@ -22,102 +20,92 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
 FULL_WEBHOOK_URL = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
 
-if not BOT_TOKEN or not OPENROUTER_API_KEY:
-    raise RuntimeError("❌ BOT_TOKEN или OPENROUTER_API_KEY не задан")
-
-# === Логирование и инициализация ===
+# Логирование
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("bot")
 
-bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
 dp = Dispatcher(storage=MemoryStorage())
 app = FastAPI()
 
-# === Генерация текста через OpenRouter ===
-async def generate_text(prompt: str) -> str:
+# /start
+@dp.message(CommandStart())
+async def start(message: Message):
+    await message.answer("👋 Я AI-помощник студентов!\n\n📄 Напиши тему реферата, презентации или вопрос — и я помогу!")
+
+# Генерация ответа от AI
+async def ask_ai(prompt: str) -> str:
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json"
     }
     data = {
-        "model": "openrouter/cinematika-7b",  # Заменить на актуальную
+        "model": "mistralai/mistral-7b-instruct",
         "messages": [
-            {"role": "system", "content": "Ты умный помощник для студентов."},
+            {"role": "system", "content": "Ты AI-помощник студентов."},
             {"role": "user", "content": prompt}
         ]
     }
-
     async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers=headers,
-            json=data
-        )
+        response = await client.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data)
         result = response.json()
-        return result["choices"][0]["message"]["content"] if "choices" in result else None
+        return result["choices"][0]["message"]["content"] if "choices" in result else "❌ Ошибка генерации ответа."
 
-# === Генерация реферата в docx ===
-def create_docx(title: str, content: str) -> str:
-    path = f"/tmp/ref_{title[:20]}.docx"
+# Генерация DOCX
+def create_docx(content: str, filename: str = "essay.docx") -> str:
+    path = f"/tmp/{filename}"
     doc = Document()
-    doc.add_heading(title, 0)
     doc.add_paragraph(content)
     doc.save(path)
     return path
 
-# === Генерация презентации в pptx ===
-def create_ppt(title: str, content: str) -> str:
-    path = f"/tmp/pres_{title[:20]}.pptx"
+# Генерация PPTX
+def create_pptx(content: str, filename: str = "presentation.pptx") -> str:
+    path = f"/tmp/{filename}"
     prs = Presentation()
-    slide = prs.slides.add_slide(prs.slide_layouts[0])
-    slide.shapes.title.text = title
-    slide.placeholders[1].text = content
+    for slide_text in content.split("\n\n"):
+        slide = prs.slides.add_slide(prs.slide_layouts[1])
+        slide.shapes.title.text = slide_text.strip().split("\n")[0][:50]
+        slide.placeholders[1].text = "\n".join(slide_text.strip().split("\n")[1:])
     prs.save(path)
     return path
 
-# === /start ===
-@dp.message(CommandStart())
-async def cmd_start(message: Message):
-    await message.answer("👋 Привет! Я помощник для студентов.\n\n📌 Напиши тему или вопрос, например:\n— Реферат на тему глобальное потепление\n— Презентация: солнечная система\n— Реши: 2x + 3 = 7")
-
-# === Основная логика ===
+# Обработка сообщений
 @dp.message(F.text)
-async def handle_message(message: Message):
-    query = message.text.lower().strip()
-    await message.answer("🔍 Обрабатываю запрос...")
+async def handle_text(message: Message):
+    user_input = message.text.lower()
 
-    if "реферат" in query:
-        content = await generate_text(f"Напиши реферат: {query}")
-        if not content:
-            return await message.answer("❌ Не удалось создать реферат.")
-        path = create_docx(query, content)
-        await message.answer_document(FSInputFile(path, filename="referat.docx"))
+    if "реферат" in user_input:
+        await message.answer("✍️ Пишу реферат...")
+        content = await ask_ai(f"Напиши реферат на тему: {message.text}")
+        path = create_docx(content)
+        await message.answer_document(FSInputFile(path), caption="📄 Реферат готов!")
 
-    elif "презентация" in query:
-        content = await generate_text(f"Сделай краткую презентацию: {query}")
-        if not content:
-            return await message.answer("❌ Не удалось создать презентацию.")
-        path = create_ppt(query, content)
-        await message.answer_document(FSInputFile(path, filename="presentation.pptx"))
+    elif "презентация" in user_input:
+        await message.answer("🧑‍🏫 Готовлю презентацию...")
+        content = await ask_ai(f"Создай структуру и текст слайдов презентации по теме: {message.text}")
+        path = create_pptx(content)
+        await message.answer_document(FSInputFile(path), caption="📊 Презентация готова!")
 
-    elif "реши" in query or "задача" in query:
-        content = await generate_text(f"Реши задачу: {query}")
-        await message.answer(content if content else "❌ Не удалось решить задачу.")
+    elif "задача" in user_input or "реши" in user_input:
+        await message.answer("🧮 Решаю задачу...")
+        answer = await ask_ai(f"Реши задачу: {message.text}")
+        await message.answer(answer)
 
     else:
-        content = await generate_text(f"Ответь на вопрос: {query}")
-        await message.answer(content if content else "❌ Не удалось получить ответ.")
+        await message.answer("🔍 Думаю...")
+        answer = await ask_ai(message.text)
+        await message.answer(answer)
 
-# === Webhook ===
+# Webhook
 @app.on_event("startup")
 async def startup():
     await bot.set_webhook(FULL_WEBHOOK_URL)
     logger.info(f"✅ Webhook установлен на {FULL_WEBHOOK_URL}")
 
 @app.post(WEBHOOK_PATH)
-async def webhook_handler(request: Request):
+async def webhook(request: Request):
     data = await request.json()
     update = Update.model_validate(data)
     await dp.feed_update(bot, update)
     return {"ok": True}
-
