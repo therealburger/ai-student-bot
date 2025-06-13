@@ -1,6 +1,6 @@
 aiogram>=3.7.0
-httpx
-python-dotenv
 fastapi
 uvicorn
+python-dotenv
+httpx
 python-docx
