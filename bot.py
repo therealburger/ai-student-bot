@@ -121,7 +121,7 @@ async def ask_openrouter(prompt: str) -> str:
     }
 
     data = {
-        "model": "nousresearch/nous-capybara-7b",
+        "model": "openchat/openchat-3.5-0106",  # ✅
         "messages": [{"role": "user", "content": prompt}]
     }
 
