@@ -1,15 +1,17 @@
 import os
 import logging
 import httpx
+from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher, F
+from aiogram.types import Message, FSInputFile, Update
+from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import Message, FSInputFile, Update
 from aiogram.filters import CommandStart
-from fastapi import FastAPI, Request
-from dotenv import load_dotenv
 from docx import Document
 from pptx import Presentation
+from pptx.util import Inches
+from dotenv import load_dotenv
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -20,21 +22,48 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
 FULL_WEBHOOK_URL = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
 
-# Логирование
+# Настройка логов
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("bot")
 
-bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
+# Инициализация бота
+bot = Bot(
+    token=BOT_TOKEN,
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+)
 dp = Dispatcher(storage=MemoryStorage())
 app = FastAPI()
 
-# /start
+# Команда /start
 @dp.message(CommandStart())
-async def start(message: Message):
-    await message.answer("👋 Я AI-помощник студентов!\n\n📄 Напиши тему реферата, презентации или вопрос — и я помогу!")
+async def cmd_start(message: Message):
+    await message.answer(
+        "👋 Привет! Я AI-помощник для студентов.\n\n"
+        "📄 Напиши, что нужно — реферат, презентация или решение задачи.\n"
+        "Например:\n"
+        "— Реферат на тему «История Интернета»\n"
+        "— Презентация по биологии про клетки\n"
+        "— Реши уравнение: 2x + 3 = 7"
+    )
 
-# Генерация ответа от AI
-async def ask_ai(prompt: str) -> str:
+# Обработка сообщений
+@dp.message(F.text)
+async def handle_message(message: Message):
+    user_input = message.text.lower()
+
+    try:
+        if "реферат" in user_input:
+            await generate_docx(message, user_input)
+        elif "презентация" in user_input:
+            await generate_pptx(message, user_input)
+        else:
+            await generate_answer(message, user_input)
+    except Exception as e:
+        logger.exception("Ошибка обработки сообщения")
+        await message.answer("❌ Произошла ошибка при обработке запроса.")
+
+# Генерация текста через OpenRouter
+async def ask_openrouter(prompt: str) -> str:
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json"
@@ -42,64 +71,62 @@ async def ask_ai(prompt: str) -> str:
     data = {
         "model": "mistralai/mistral-7b-instruct",
         "messages": [
-            {"role": "system", "content": "Ты AI-помощник студентов."},
             {"role": "user", "content": prompt}
         ]
     }
     async with httpx.AsyncClient() as client:
-        response = await client.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data)
+        response = await client.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers=headers,
+            json=data
+        )
         result = response.json()
-        return result["choices"][0]["message"]["content"] if "choices" in result else "❌ Ошибка генерации ответа."
+        return result["choices"][0]["message"]["content"]
 
-# Генерация DOCX
-def create_docx(content: str, filename: str = "essay.docx") -> str:
-    path = f"/tmp/{filename}"
+# Генерация .docx
+async def generate_docx(message: Message, prompt: str):
+    await message.answer("✍️ Генерирую реферат...")
+    content = await ask_openrouter(prompt)
+
     doc = Document()
+    doc.add_heading('Реферат', 0)
     doc.add_paragraph(content)
-    doc.save(path)
-    return path
+    file_path = "ref.docx"
+    doc.save(file_path)
 
-# Генерация PPTX
-def create_pptx(content: str, filename: str = "presentation.pptx") -> str:
-    path = f"/tmp/{filename}"
+    await message.answer_document(FSInputFile(file_path), caption="📄 Готовый реферат")
+
+# Генерация .pptx
+async def generate_pptx(message: Message, prompt: str):
+    await message.answer("🛠 Генерирую презентацию...")
+    content = await ask_openrouter(f"{prompt}. Сделай структуру с пунктами для слайдов.")
+    slides = content.split('\n')
+
     prs = Presentation()
-    for slide_text in content.split("\n\n"):
-        slide = prs.slides.add_slide(prs.slide_layouts[1])
-        slide.shapes.title.text = slide_text.strip().split("\n")[0][:50]
-        slide.placeholders[1].text = "\n".join(slide_text.strip().split("\n")[1:])
-    prs.save(path)
-    return path
+    title_slide_layout = prs.slide_layouts[0]
+    slide = prs.slides.add_slide(title_slide_layout)
+    slide.shapes.title.text = "Презентация"
+    slide.placeholders[1].text = prompt.capitalize()
 
-# Обработка сообщений
-@dp.message(F.text)
-async def handle_text(message: Message):
-    user_input = message.text.lower()
+    for line in slides:
+        if line.strip():
+            slide = prs.slides.add_slide(prs.slide_layouts[1])
+            slide.shapes.title.text = line.strip()
+            slide.placeholders[1].text = "..."
 
-    if "реферат" in user_input:
-        await message.answer("✍️ Пишу реферат...")
-        content = await ask_ai(f"Напиши реферат на тему: {message.text}")
-        path = create_docx(content)
-        await message.answer_document(FSInputFile(path), caption="📄 Реферат готов!")
+    file_path = "presentation.pptx"
+    prs.save(file_path)
+    await message.answer_document(FSInputFile(file_path), caption="📊 Готовая презентация")
 
-    elif "презентация" in user_input:
-        await message.answer("🧑‍🏫 Готовлю презентацию...")
-        content = await ask_ai(f"Создай структуру и текст слайдов презентации по теме: {message.text}")
-        path = create_pptx(content)
-        await message.answer_document(FSInputFile(path), caption="📊 Презентация готова!")
+# Ответ без файла
+async def generate_answer(message: Message, prompt: str):
+    await message.answer("🤖 Думаю над ответом...")
+    reply = await ask_openrouter(prompt)
+    await message.answer(reply)
 
-    elif "задача" in user_input or "реши" in user_input:
-        await message.answer("🧮 Решаю задачу...")
-        answer = await ask_ai(f"Реши задачу: {message.text}")
-        await message.answer(answer)
-
-    else:
-        await message.answer("🔍 Думаю...")
-        answer = await ask_ai(message.text)
-        await message.answer(answer)
-
-# Webhook
+# Webhook запуск
 @app.on_event("startup")
-async def startup():
+async def on_startup():
     await bot.set_webhook(FULL_WEBHOOK_URL)
     logger.info(f"✅ Webhook установлен на {FULL_WEBHOOK_URL}")
 
