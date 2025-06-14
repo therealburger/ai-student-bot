@@ -29,9 +29,11 @@ logger = logging.getLogger("bot")
 # Инициализация бота и диспетчера
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=MemoryStorage())
+
+# FastAPI
 app = FastAPI()
 
-# Команда /start
+# Стартовая команда
 @dp.message(F.text == "/start")
 async def start(message: Message):
     await message.answer(
@@ -41,11 +43,11 @@ async def start(message: Message):
         "🧮 Задача: просто напиши её!"
     )
 
-# Обработка сообщений
+# Обработка всех сообщений
 @dp.message()
 async def handle_message(message: Message):
     try:
-        text = message.text.lower().strip()
+        text = message.text.lower()
 
         if text.startswith("реферат:"):
             prompt = text.split("реферат:", 1)[1].strip()
@@ -62,7 +64,7 @@ async def handle_message(message: Message):
         logger.error(f"Ошибка обработки сообщения: {e}")
         await message.answer("❌ Ошибка при обработке запроса.")
 
-# Генерация ответа в чате
+# Генерация обычного ответа
 async def generate_answer(message: Message, prompt: str):
     try:
         response = await ask_openrouter(prompt)
@@ -71,7 +73,7 @@ async def generate_answer(message: Message, prompt: str):
         logger.error(f"Ошибка генерации ответа: {e}")
         await message.answer("❌ Не удалось сгенерировать ответ.")
 
-# Генерация .docx (реферат)
+# Генерация реферата (.docx)
 async def generate_docx(message: Message, prompt: str):
     try:
         content = await ask_openrouter(f"Напиши подробный реферат на тему: {prompt}")
@@ -82,20 +84,23 @@ async def generate_docx(message: Message, prompt: str):
         filename = f"ref_{message.chat.id}.docx"
         doc.save(filename)
 
-        await message.answer("📎 Отправляю реферат в формате .docx...")
-        await message.answer_document(FSInputFile(filename))
-        os.remove(filename)
+        if os.path.exists(filename):
+            await message.answer("📎 Отправляю реферат в формате .docx...")
+            await message.answer_document(FSInputFile(filename))
+            os.remove(filename)
+        else:
+            await message.answer("❌ Не удалось найти файл.")
 
     except Exception as e:
         logger.error(f"Ошибка при генерации реферата: {e}")
         await message.answer("❌ Ошибка при генерации реферата.")
 
-# Генерация .pptx (презентация)
+# Генерация презентации (.pptx)
 async def generate_pptx(message: Message, prompt: str):
     try:
         content = await ask_openrouter(f"Сделай структуру презентации по теме: {prompt}. Формат: Слайд 1: Заголовок - Описание")
-        prs = Presentation()
 
+        prs = Presentation()
         for line in content.split("\n"):
             if ":" in line:
                 parts = line.split(":", 1)
@@ -108,15 +113,18 @@ async def generate_pptx(message: Message, prompt: str):
         filename = f"ppt_{message.chat.id}.pptx"
         prs.save(filename)
 
-        await message.answer("📎 Отправляю презентацию в формате .pptx...")
-        await message.answer_document(FSInputFile(filename))
-        os.remove(filename)
+        if os.path.exists(filename):
+            await message.answer("📎 Отправляю презентацию в формате .pptx...")
+            await message.answer_document(FSInputFile(filename))
+            os.remove(filename)
+        else:
+            await message.answer("❌ Не удалось найти файл.")
 
     except Exception as e:
         logger.error(f"Ошибка при генерации презентации: {e}")
         await message.answer("❌ Ошибка при генерации презентации.")
 
-# Запрос к OpenRouter
+# Запрос к OpenRouter API
 async def ask_openrouter(prompt: str) -> str:
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -136,7 +144,7 @@ async def ask_openrouter(prompt: str) -> str:
     else:
         raise Exception(f"Ошибка OpenRouter: {result}")
 
-# Установка Webhook
+# Установка webhook
 @app.on_event("startup")
 async def on_startup():
     await bot.set_webhook(FULL_WEBHOOK_URL)
@@ -147,4 +155,4 @@ async def process_webhook(request: Request):
     data = await request.json()
     update = Update.model_validate(data)
     await dp.feed_update(bot, update)
-    return {"ok": True"}
+    return {"ok": True}
