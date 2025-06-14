@@ -36,12 +36,7 @@ app = FastAPI()
 # Стартовая команда
 @dp.message(F.text == "/start")
 async def start(message: Message):
-    await message.answer(
-        "👋 Привет! Я AI-помощник студентов.\n\n"
-        "📄 Реферат: `реферат: тема`\n"
-        "📊 Презентация: `презентация: тема`\n"
-        "🧮 Задача: просто напиши её!"
-    )
+    await message.answer("👋 Привет! Я AI-помощник студентов.\n\n📄 Реферат: `реферат: тема`\n📊 Презентация: `презентация: тема`\n🧮 Задача: просто напиши её!")
 
 # Обработка всех сообщений
 @dp.message()
@@ -83,8 +78,13 @@ async def generate_docx(message: Message, prompt: str):
 
         filename = f"ref_{message.chat.id}.docx"
         doc.save(filename)
-        await message.answer_document(FSInputFile(filename))
-        os.remove(filename)
+
+        if os.path.exists(filename):
+            await message.answer("📎 Отправляю реферат в формате .docx...")
+            await message.answer_document(FSInputFile(filename))
+            os.remove(filename)
+        else:
+            await message.answer("❌ Не удалось найти файл.")
 
     except Exception as e:
         logger.error(f"Ошибка при генерации реферата: {e}")
@@ -93,10 +93,7 @@ async def generate_docx(message: Message, prompt: str):
 # Генерация презентации (.pptx)
 async def generate_pptx(message: Message, prompt: str):
     try:
-        content = await ask_openrouter(
-            f"Сделай структуру презентации по теме: {prompt}. "
-            f"Формат: Слайд 1: Заголовок - Описание"
-        )
+        content = await ask_openrouter(f"Сделай структуру презентации по теме: {prompt}. Формат: Слайд 1: Заголовок - Описание")
 
         prs = Presentation()
         for line in content.split("\n"):
@@ -110,8 +107,13 @@ async def generate_pptx(message: Message, prompt: str):
 
         filename = f"ppt_{message.chat.id}.pptx"
         prs.save(filename)
-        await message.answer_document(FSInputFile(filename))
-        os.remove(filename)
+
+        if os.path.exists(filename):
+            await message.answer("📎 Отправляю презентацию в формате .pptx...")
+            await message.answer_document(FSInputFile(filename))
+            os.remove(filename)
+        else:
+            await message.answer("❌ Не удалось найти файл.")
 
     except Exception as e:
         logger.error(f"Ошибка при генерации презентации: {e}")
@@ -129,11 +131,7 @@ async def ask_openrouter(prompt: str) -> str:
     }
 
     async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers=headers,
-            json=data
-        )
+        response = await client.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data)
 
     result = response.json()
     if "choices" in result:
@@ -150,6 +148,10 @@ async def on_startup():
 @app.post(WEBHOOK_PATH)
 async def process_webhook(request: Request):
     data = await request.json()
+    update = Update.model_validate(data)
+    await dp.feed_update(bot, update)
+    return {"ok": True}
+
     update = Update.model_validate(data)
     await dp.feed_update(bot, update)
     return {"ok": True}
