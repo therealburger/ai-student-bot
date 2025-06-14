@@ -36,7 +36,12 @@ app = FastAPI()
 # Стартовая команда
 @dp.message(F.text == "/start")
 async def start(message: Message):
-    await message.answer("👋 Привет! Я AI-помощник студентов.\n\n📄 Реферат: `реферат: тема`\n📊 Презентация: `презентация: тема`\n🧮 Задача: просто напиши её!")
+    await message.answer(
+        "👋 Привет! Я AI-помощник студентов.\n\n"
+        "📄 Реферат: `реферат: тема`\n"
+        "📊 Презентация: `презентация: тема`\n"
+        "🧮 Задача: просто напиши её!"
+    )
 
 # Обработка всех сообщений
 @dp.message()
@@ -88,7 +93,10 @@ async def generate_docx(message: Message, prompt: str):
 # Генерация презентации (.pptx)
 async def generate_pptx(message: Message, prompt: str):
     try:
-        content = await ask_openrouter(f"Сделай структуру презентации по теме: {prompt}. Формат: Слайд 1: Заголовок - Описание")
+        content = await ask_openrouter(
+            f"Сделай структуру презентации по теме: {prompt}. "
+            f"Формат: Слайд 1: Заголовок - Описание"
+        )
 
         prs = Presentation()
         for line in content.split("\n"):
@@ -116,12 +124,16 @@ async def ask_openrouter(prompt: str) -> str:
         "Content-Type": "application/json"
     }
     data = {
-        "model": "mistralai/mixtral-8x7b",  # используем доступную модель
+        "model": "openai/gpt-4o-mini",
         "messages": [{"role": "user", "content": prompt}]
     }
 
     async with httpx.AsyncClient() as client:
-        response = await client.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data)
+        response = await client.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers=headers,
+            json=data
+        )
 
     result = response.json()
     if "choices" in result:
